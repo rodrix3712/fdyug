@@ -1,50 +1,44 @@
 package com.example.telly;
 
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
-import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-import net.minecraftforge.client.event.ClientTickEvent;
-import net.minecraftforge.client.event.RenderGuiEvent;
-import net.minecraftforge.client.event.RenderLevelLastEvent;
-import net.minecraftforge.client.event.InputEvent;
-import net.minecraftforge.event.world.WorldEvent;
-import net.minecraftforge.event.entity.player.PlayerInteractEvent;
-import net.minecraftforge.event.network.PacketEvent;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.network.protocol.game.*;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundInteractPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.minecraftforge.client.event.InputEvent;
+import net.minecraftforge.client.event.RenderGuiEvent;
+import net.minecraftforge.client.event.RenderLevelStageEvent;
+import net.minecraftforge.event.world.WorldEvent;
+import net.minecraftforge.event.network.PacketEvent;
+import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import org.lwjgl.glfw.GLFW;
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.Tesselator;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.VertexFormat;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Mod("telly")
 public class TellyMod {
-    public static TellyMod INSTANCE;
     private TellyCore core;
 
     public TellyMod() {
-        INSTANCE = this;
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::clientSetup);
         MinecraftForge.EVENT_BUS.register(this);
     }
@@ -54,17 +48,17 @@ public class TellyMod {
         core.registerKeyBinding();
     }
 
-    @SubscribeEvent public void onClientTick(ClientTickEvent e) { if (core != null) core.onClientTick(e); }
+    @SubscribeEvent public void onClientTick(TickEvent.ClientTickEvent e) { if (core != null) core.onClientTick(e); }
     @SubscribeEvent public void onRenderGui(RenderGuiEvent.Post e) { if (core != null) core.onRenderGui(e); }
-    @SubscribeEvent public void onRenderWorld(RenderLevelLastEvent e) { if (core != null) core.onRenderWorld(e); }
+    @SubscribeEvent public void onRenderWorld(RenderLevelStageEvent e) { if (core != null) core.onRenderWorld(e); }
     @SubscribeEvent public void onInputKey(InputEvent.Key e) { if (core != null) core.onInputKey(e); }
     @SubscribeEvent public void onInputMouse(InputEvent.Mouse e) { if (core != null) core.onInputMouse(e); }
     @SubscribeEvent public void onPacketSend(PacketEvent.SendToServer e) { if (core != null) core.onPacketSend(e); }
     @SubscribeEvent public void onPacketReceive(PacketEvent.ReceiveFromServer e) { if (core != null) core.onPacketReceive(e); }
     @SubscribeEvent public void onWorldLoad(WorldEvent.Load e) { if (core != null) core.onWorldLoad(e); }
-    @SubscribeEvent public void onRightClickBlock(PlayerInteractEvent.RightClickBlock e) { if (core != null) core.onRightClickBlock(e); }
-    @SubscribeEvent public void onLeftClickBlock(PlayerInteractEvent.LeftClickBlock e) { if (core != null) core.onLeftClickBlock(e); }
+    @SubscribeEvent public void onPlayerJoin(ClientPlayerNetworkEvent.LoggingIn e) { if (core != null) core.onPlayerJoin(e); }
 
+    // 内部核心类
     public static class TellyCore {
         private final Minecraft mc = Minecraft.getInstance();
         private KeyMapping toggleKey;
@@ -74,8 +68,8 @@ public class TellyMod {
         private int promptFadeRgb = 0xFF5555;
         private int[] hitboxLastPos = null, activationAnchorPos = null;
         private int hitboxLastFace = -1, activationAnchorFace = -1;
-        private boolean activationMovementHeld = false, eagleDisabledForActivation = false, eagleWasDisabledByTelly = false;
-        private boolean safeWalkStateCaptured = false, safeWalkWasEnabled = false;
+        private boolean activationMovementHeld = false;
+        private boolean safeWalkStateCaptured = false;
         private int setupTick = 0, cyclePhase = 19;
         private float stagedForward = -1f, stagedStrafe = -1f;
         private boolean stagedJump = false, stagedSprint = false;
@@ -108,7 +102,7 @@ public class TellyMod {
         private float[] forwardCurve = {1f,1f,0f,0f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,-1f,1f};
         private float[] strafeCurve = {-1f,-1f,-1f,-1f,0f,0f,0f,0f,0f,0f,0f,0f,0f,0f,0f,0f,0f,-1f,-1f,-1f,-1f};
 
-        // AutoPlace state
+        // auto-place state
         private int currentClientTick = Integer.MIN_VALUE, placementEvaluationTick = Integer.MIN_VALUE;
         private int lastPlacementAttemptTick = Integer.MIN_VALUE, lastSuccessfulPlaceTick = Integer.MIN_VALUE;
         private int forceSuppressTick = Integer.MIN_VALUE;
@@ -131,7 +125,7 @@ public class TellyMod {
         private boolean tellyAutoPlaceWindow = false, autoPlaceDebugActive = false;
         private final List<int[]> cancelledGhostBlocks = new ArrayList<>();
         private final Map<String, Boolean> settings = new HashMap<>();
-        private final Map<String, Object> bridgeStore = new ConcurrentHashMap<>();
+        private boolean antiSwayTapUsed = false;
 
         public TellyCore() {
             settings.put("autoSwap", true);
@@ -140,15 +134,23 @@ public class TellyMod {
             settings.put("print", false);
             toggleKey = new KeyMapping("key.telly.toggle", GLFW.GLFW_KEY_T, "key.categories.telly");
         }
-        public void registerKeyBinding() { net.minecraftforge.client.ClientRegistry.registerKeyBinding(toggleKey); }
 
-        public void onClientTick(ClientTickEvent e) {
-            if (e.getPhase() == ClientTickEvent.Phase.START) handleUpdatePre();
+        public void registerKeyBinding() {
+            net.minecraftforge.client.ClientRegistry.registerKeyBinding(toggleKey);
+        }
+
+        public void onClientTick(TickEvent.ClientTickEvent e) {
+            if (e.phase == TickEvent.Phase.START) handleUpdatePre();
             else handleUpdatePost();
             if (running) applyTellyMovementInput();
         }
+
         public void onRenderGui(RenderGuiEvent.Post e) { drawActivatePrompt(e.getPoseStack()); }
-        public void onRenderWorld(RenderLevelLastEvent e) { if (settings.get("showActivationHitbox")) drawActivationFaceRegion(e.getPoseStack(), e.getPartialTick()); }
+        public void onRenderWorld(RenderLevelStageEvent e) {
+            if (settings.get("showActivationHitbox") && e.getStage() == RenderLevelStageEvent.Stage.AFTER_SKY) {
+                drawActivationFaceRegion(e.getPoseStack(), e.getPartialTick());
+            }
+        }
         public void onInputKey(InputEvent.Key e) {
             if (e.getAction() == GLFW.GLFW_PRESS && toggleKey.isDown()) {
                 if (!running && !armed) armAutomation();
@@ -177,13 +179,13 @@ public class TellyMod {
             }
         }
         public void onWorldLoad(WorldEvent.Load e) { if (mc.player != null) stopAutomation(false); }
-        public void onRightClickBlock(PlayerInteractEvent.RightClickBlock e) { if (running) e.setCanceled(true); }
-        public void onLeftClickBlock(PlayerInteractEvent.LeftClickBlock e) { if (running) e.setCanceled(true); }
+        public void onPlayerJoin(ClientPlayerNetworkEvent.LoggingIn e) { if (mc.player != null) stopAutomation(false); }
 
+        // --- 核心方法实现 ---
         private void handleUpdatePre() {
             if (!running && armed) updateActivationPrompt();
             if (!running) return;
-            enforceSafeWalkDisabledForRun();
+            enforceSafeWalkDisabled();
             setKeyPressed("attack", false);
             applySmoothedRotation();
             holdScriptedRotation();
@@ -206,19 +208,15 @@ public class TellyMod {
             manualC08InWindow = false;
         }
 
-        // ---------- Core logic ----------
         private void armAutomation() {
             armed = true; running = false;
             activatePromptAt = 0L; promptBrokeAt = 0L; setupTick = 0; cyclePhase = 19;
             rotationActive = false; activationMovementHeld = false;
-            eagleDisabledForActivation = false; eagleWasDisabledByTelly = false;
             printStatus("Armed. Sneak looking down, wait for green, hold rmb and release sneak");
         }
         private void stopAutomation(boolean turnOff) {
-            boolean restoreEagle = eagleWasDisabledByTelly;
             armed = false; running = false; setupTick = 0; cyclePhase = 19;
             rotationActive = false; activationMovementHeld = false;
-            eagleDisabledForActivation = false; eagleWasDisabledByTelly = false;
             tellyAutoPlaceWindow = false; autoPlaceDebugActive = false;
             antiSwayYawOffset = 0f; antiSwayTapUsed = false;
             firstTellyPlacementPending = false; latestStraightPlacedPos = null;
@@ -234,12 +232,11 @@ public class TellyMod {
             if (mc.player != null) { mc.player.input.forwardImpulse = 0; mc.player.input.leftImpulse = 0; mc.player.input.jumping = false; }
             mc.options.keySprint.setDown(false);
             mc.options.keyShift.setDown(false);
-            mc.options.keyUse.setDown(mc.mouseHandler.isLeftPressed() ? false : false); // restore later
+            mc.options.keyUse.setDown(false);
             restoreSafeWalkState();
             freezeLastTickAt = 0L;
             armed = true;
             activatePromptAt = 0L; promptBrokeAt = 0L;
-            if (restoreEagle) restoreEagleAfterTelly();
             if (turnOff) printStatus("Stopped. Sneak looking down to arm again");
         }
         private void beginAutomation() {
@@ -280,7 +277,7 @@ public class TellyMod {
         private void advanceTellyCycle() {
             if (!running) return;
             suppressSneakInput();
-            enforceSafeWalkDisabledForRun();
+            enforceSafeWalkDisabled();
             if (setupTick >= 0) {
                 if (setupTick < 12) {
                     boolean setupJump = setupTick >= 6;
@@ -316,7 +313,7 @@ public class TellyMod {
         private void applyTellyMovementInput() {
             if (!running) return;
             suppressSneakInput();
-            enforceSafeWalkDisabledForRun();
+            enforceSafeWalkDisabled();
             holdScriptedRotation();
             applyMovement(stagedForward, stagedStrafe, stagedJump, stagedSprint);
         }
@@ -346,9 +343,8 @@ public class TellyMod {
             else if (key.equals("jump")) mc.options.keyJump.setDown(pressed);
         }
         private void suppressSneakInput() { mc.options.keyShift.setDown(false); if (mc.player != null) mc.player.input.shiftKeyDown = false; }
-        private void enforceSafeWalkDisabledForRun() {
+        private void enforceSafeWalkDisabled() {
             if (safeWalkStateCaptured) {
-                // 直接禁用shift
                 mc.options.keyShift.setDown(false);
                 if (mc.player != null) mc.player.input.shiftKeyDown = false;
             }
@@ -357,14 +353,10 @@ public class TellyMod {
             if (safeWalkStateCaptured) return;
             if (!settings.get("disableSafeWalk")) return;
             safeWalkStateCaptured = true;
-            safeWalkWasEnabled = false; // 实际我们直接禁用shift
         }
         private void restoreSafeWalkState() {
-            if (!safeWalkStateCaptured) return;
             safeWalkStateCaptured = false;
-            // 不恢复，保持禁用
         }
-        private void restoreEagleAfterTelly() {}
         private void holdScriptedRotation() {
             if (mc.player != null) { mc.player.setYRot(scriptedRotationYaw); mc.player.setXRot(scriptedRotationPitch); }
         }
@@ -389,7 +381,7 @@ public class TellyMod {
             return origin + delta;
         }
         private float rotationGcd() {
-            float sens = mc.options.sensitivity().get();
+            float sens = (float)mc.options.sensitivity().get();
             float f = sens * 0.6f + 0.2f;
             return f * f * f * 8f * 0.15f;
         }
@@ -427,7 +419,7 @@ public class TellyMod {
                 if (activatePromptAt != 0L && System.currentTimeMillis()-activatePromptAt >= 1000L) {
                     disableSafeWalkForRun();
                     if (mc.mouseHandler.isLeftPressed()) {
-                        if (safeWalkStateCaptured) enforceSafeWalkDisabledForRun();
+                        if (safeWalkStateCaptured) enforceSafeWalkDisabled();
                     } else if (safeWalkStateCaptured) restoreSafeWalkState();
                 }
                 return;
@@ -449,7 +441,6 @@ public class TellyMod {
             if (activatePromptAt != 0L && System.currentTimeMillis()-activatePromptAt >= 850L) setKeyPressed("use", false);
             activatePromptAt = 0L; promptBrokeAt = 0L;
             activationAnchorPos = null; activationAnchorFace = -1;
-            eagleDisabledForActivation = false;
             setActivationMovementHold(false);
             if (!running) restoreSafeWalkState();
         }
@@ -460,7 +451,7 @@ public class TellyMod {
         private boolean isLookingAtEdge(LocalPlayer p) {
             if (!isActivationYawAligned(p.getYRot())) return false;
             BlockHitResult hit = mc.hitResult instanceof BlockHitResult ? (BlockHitResult)mc.hitResult : null;
-            if (hit == null || hit.getType() != HitResult.Type.BLOCK) return false;
+            if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) return false;
             Direction face = hit.getDirection();
             if (face.getAxis() == Direction.Axis.Y) return false;
             Vec3 pos = hit.getBlockPos().getCenter();
@@ -486,7 +477,7 @@ public class TellyMod {
         private void captureActivationAnchor(LocalPlayer p) {
             if (p == null) return;
             BlockHitResult hit = mc.hitResult instanceof BlockHitResult ? (BlockHitResult)mc.hitResult : null;
-            if (hit == null || hit.getType() != HitResult.Type.BLOCK) { if (hitboxLastPos != null && hitboxLastFace >= 2) { activationAnchorPos = hitboxLastPos.clone(); activationAnchorFace = hitboxLastFace; } return; }
+            if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) { if (hitboxLastPos != null && hitboxLastFace >= 2) { activationAnchorPos = hitboxLastPos.clone(); activationAnchorFace = hitboxLastFace; } return; }
             Direction face = hit.getDirection();
             if (face.getAxis() == Direction.Axis.Y) return;
             BlockPos pos = hit.getBlockPos();
@@ -520,7 +511,7 @@ public class TellyMod {
             return new int[]{0, rawZ >= 0 ? 1 : -1};
         }
 
-        private void drawActivationPrompt(PoseStack pose) {
+        private void drawActivatePrompt(net.minecraft.client.gui.GuiGraphics gui) {
             if (promptAlpha < 0.05f) return;
             String text = "Activate?";
             int alpha = (int)(promptAlpha * 255);
@@ -528,30 +519,25 @@ public class TellyMod {
             int color = (alpha << 24) | promptFadeRgb;
             float x = mc.getWindow().getGuiScaledWidth() / 2f - mc.font.width(text) / 2f;
             float y = mc.getWindow().getGuiScaledHeight() / 2f + 10f;
-            mc.font.draw(pose, text, x, y, color);
+            gui.drawString(mc.font, text, (int)x, (int)y, color);
         }
-        private void drawActivationFaceRegion(PoseStack pose, float partial) {
-            if (promptAlpha < 0.05f || hitboxLastPos == null || hitboxLastFace < 2) return;
-            // 简化渲染，略
+        private void drawActivationFaceRegion(net.minecraft.client.gui.GuiGraphics gui, float partial) {
+            // 简化渲染，省略（实际可使用 Tesselator 绘制）
         }
-        // 为了节省空间，省略渲染实现，但可加
 
-        // AutoPlace methods (精简)
+        // AutoPlace methods
         private void processAutoPlaceTick(LocalPlayer p) {
-            // 简化：直接放置
             if (!tellyAutoPlaceWindow || !isHoldingBlock(p)) return;
             if (!isReplaceable(new BlockPos((int)Math.floor(p.getX()), (int)Math.floor(p.getY())-1, (int)Math.floor(p.getZ())))) return;
-            // 根据脚本视角搜索放置
             float yaw = running ? scriptedRotationYaw : p.getYRot();
             float pitch = running ? scriptedRotationPitch : p.getXRot();
             BlockHitResult hit = mc.hitResult instanceof BlockHitResult ? (BlockHitResult)mc.hitResult : null;
-            if (hit == null || hit.getType() != HitResult.Type.BLOCK) return;
+            if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) return;
             BlockPos support = hit.getBlockPos();
             Direction face = hit.getDirection();
             BlockPos target = support.relative(face);
             if (!isReplaceable(target)) return;
             if (!isStraightTellyTarget(new int[]{target.getX(), target.getY(), target.getZ()})) return;
-            // 放置
             mc.gameMode.useItemOn(p, InteractionHand.MAIN_HAND, hit);
             totalC08Counter++;
         }
@@ -570,7 +556,7 @@ public class TellyMod {
             int[] anchor = activationAnchorPos != null ? activationAnchorPos : (hitboxLastPos != null ? hitboxLastPos : null);
             if (anchor == null) {
                 BlockHitResult hit = mc.hitResult instanceof BlockHitResult ? (BlockHitResult)mc.hitResult : null;
-                if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
+                if (hit != null && hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
                     BlockPos pos = hit.getBlockPos();
                     int[] pArr = {pos.getX(), pos.getY(), pos.getZ()};
                     if (isPlayerOnActivationBlock(p, pArr)) { anchor = pArr; activationAnchorPos = pArr.clone(); activationAnchorFace = hit.getDirection().ordinal(); }
@@ -629,7 +615,6 @@ public class TellyMod {
         private void clearCachedCandidate() { cachedCandidate = null; cachedCandidateTick = Integer.MIN_VALUE; cachedCandidateYaw = Float.NaN; cachedCandidatePitch = Float.NaN; candidateResolvedThisTick = false; }
         private void updateAdaptivePlacementAim(LocalPlayer p) {
             if (!firstTellyPlacementPending) return;
-            // 简化：使用上次放置位置
             if (latestStraightPlacedPos != null) {
                 int[] support = latestStraightPlacedPos;
                 int face = travelX > 0 ? Direction.EAST.ordinal() : travelX < 0 ? Direction.WEST.ordinal() : travelZ > 0 ? Direction.SOUTH.ordinal() : Direction.NORTH.ordinal();
@@ -703,9 +688,7 @@ public class TellyMod {
                     key == mc.options.keyJump.getKey().getValue() || key == mc.options.keyShift.getKey().getValue() ||
                     key == mc.options.keySprint.getKey().getValue();
         }
-        private boolean isScriptHeldKey(int key) {
-            return false; // 简化
-        }
+        private boolean isScriptHeldKey(int key) { return false; }
         private boolean isInitialMovementHold(int key) {
             if (key == mc.options.keyUp.getKey().getValue()) return ignoreForwardUntilRelease;
             if (key == mc.options.keyDown.getKey().getValue()) return ignoreBackUntilRelease;
@@ -741,7 +724,5 @@ public class TellyMod {
         private void printStatus(String msg) {
             if (settings.get("print") && mc.player != null) mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§bTelly §7| " + msg));
         }
-        // 其他辅助
-        private boolean antiSwayTapUsed = false;
     }
 }
